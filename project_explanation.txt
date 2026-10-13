@@ -1,0 +1,188 @@
+QuickSort.h
+-----------
+QuickSort.h defines a generic quicksort implementation for arrays of any type T.
+It inherits from ISort<T> and implements the sort() method required by the interface.
+
+Core idea:
+- It takes an array pointer, the number of elements, and optionally a comparator function.
+- It uses the divide-and-conquer quicksort strategy:
+  1. Choose a pivot position.
+  2. Partition elements around the pivot.
+  3. Recursively sort the left and right partitions.
+
+Important details:
+- If a custom comparator is supplied, it is used instead of the default < operator.
+- The comparator must return:
+  - negative value if lhs < rhs
+  - zero if lhs == rhs
+  - positive value if lhs > rhs
+- The pivot selection is customizable through the constructor parameter pivotSelection.
+  - If provided, it chooses a different pivot index.
+  - Otherwise, the middle element is used.
+- The class is designed for sorting arrays directly in place, which is useful for ranking route results and journey results in BKMove.
+
+How it works in practice:
+- sort(array, size, comparator) calls quickSort(array, 0, size - 1, comparator)
+- quickSort partitions the array recursively until the subarray size is 1 or 0
+- Once sorted, the array elements are in ascending order according to the comparator
+
+Why this matters in this project:
+- BKMove uses QuickSort to rank search results by total hops, route ID, direction, and transfer stop.
+- This lets it sort RouteResult and JourneyResult arrays deterministically before returning them.
+
+
+BusRoute.h
+----------
+BusRoute.h declares the BusRoute class, which represents a single bus route.
+A route is built from:
+- an ID (routeId)
+- a circular list of stops (stops)
+- an outbound count (outboundCount)
+- a boolean flag indicating whether it was built (built)
+
+Public interface:
+- BusRoute(string routeId)
+- getId() const
+- isBuilt() const
+- build(SLinkedList<BusStop>& outbound, SLinkedList<BusStop>& inbound)
+- getStopCount(Direction direction)
+- getStop(int index, Direction direction)
+- getHopCount(string fromStopId, string toStopId, Direction direction)
+
+Purpose:
+- Each route stores the outbound stop list as the main sequence.
+- The inbound sequence is treated as the reverse direction of the same route.
+- Because the route is modeled as a circular list, the stop access code can map between:
+  - outbound direction
+  - inbound direction
+  - the actual internal storage layout
+
+Private helper:
+- physicalIndex(int index, Direction direction)
+  This translates a logical route index in outbound/inbound order into the underlying stop list position.
+
+
+BusRoute.cpp
+------------
+BusRoute.cpp implements the behavior described by BusRoute.h.
+
+Constructor:
+- Initializes the route id and resets route state.
+- The route starts unbuilt until build() is called.
+
+isBuilt():
+- Returns whether the route has valid stop data loaded.
+
+getStopCount(direction):
+- Returns the number of stops in the requested direction.
+- OUTBOUND returns the outbound segment length.
+- INBOUND returns the number of stops in the inbound view.
+- If the route is not built, it returns 0.
+
+physicalIndex(index, direction):
+- Converts a logical index in the chosen direction into the actual index used in the internal circular stop list.
+- For OUTBOUND, it is usually the same as the index.
+- For INBOUND, it maps the inbound index back to the combined route layout.
+- If an invalid index or direction is used, it throws an out_of_range exception.
+
+getStop(index, direction):
+- Returns the stop at the given logical index in the selected direction.
+- Calls physicalIndex() to translate to the internal stop list before returning a reference.
+
+build(outbound, inbound):
+- Clears any old route data.
+- Stores the size of the outbound route.
+- Adds all outbound stops to the internal route structure.
+- Adds the inbound sequence after the outbound part, skipping the repeated terminal stop at index 0 so that the route is not duplicated.
+- Marks the route as built.
+
+getHopCount(fromStopId, toStopId, direction):
+- Checks whether a stop ID pair exists in the selected direction.
+- Returns:
+  - 0 if the same stop exists and both IDs are the same
+  - the number of hops between the two stops if the route order is valid
+  - -1 if the route does not contain them in that direction or if the order is invalid
+
+This method is the key route-query operation used later by BKMove.
+
+
+BKMove.h
+--------
+BKMove.h declares the BKMove class, which represents the overall transit map.
+It stores a collection of routes:
+- vector<BusRoute*> routes;
+
+Public interface:
+- addRoute(BusRoute* route)
+- getRouteCount() const
+- getRoute(int index)
+- findDirectRoutes(string fromStopId, string toStopId)
+- findJourneys(string fromStopId, string toStopId)
+
+Purpose:
+- BKMove is the search layer that scans all routes in the network.
+- It answers questions like:
+  - Which routes go directly from A to B?
+  - Which routes can take me from A to B with one transfer?
+  - How should results be ranked?
+
+
+BKMove.cpp
+----------
+BKMove.cpp implements the transit-search logic.
+
+addRoute(route):
+- Adds a route pointer to the internal routes vector.
+- Rejects null pointers.
+
+getRouteCount():
+- Returns the number of registered routes.
+
+getRoute(index):
+- Returns the route at the requested index.
+- Throws an out_of_range exception if the index is invalid.
+
+findDirectRoutes(fromStopId, toStopId):
+- Iterates over every route and every direction (OUTBOUND and INBOUND).
+- Uses BusRoute::getHopCount() to check if the route can travel from the origin to the destination directly.
+- If a valid direct route is found, it stores a RouteResult containing:
+  - route ID
+  - direction
+  - hop count
+- After collecting results, it sorts them using QuickSort<RouteResult>.
+
+Sorting order for direct routes:
+- fewer hops first
+- then route ID ascending
+- then direction ordering
+
+This gives a deterministic ranking of direct options.
+
+findJourneys(fromStopId, toStopId):
+- Starts by adding all direct routes as zero-transfer journeys.
+- Then it searches for one-transfer journeys:
+  1. For each route and direction, look at every stop as a possible transfer stop.
+  2. Skip stops that are the origin or destination.
+  3. Check whether the first leg from origin to transferStop is valid.
+  4. Check whether the second route can take the transfer stop to the destination.
+  5. Build a JourneyResult for the valid combination.
+  6. Avoid duplicates.
+- After collecting all possible journeys, it sorts them with QuickSort<JourneyResult>.
+
+Ranking order for journeys:
+- fewer transfers first
+- fewer total hops next
+- first route ID next
+- first direction next
+- transfer stop ID next
+- second route ID next
+- second direction next
+
+This ranking matches the assignment’s expected tie-break behavior.
+
+Summary
+-------
+- QuickSort.h sorts arrays based on a comparator or default ordering.
+- BusRoute.h/cpp model one route and handle directional stop access and hop counts.
+- BKMove.h/cpp operate at the network level, scanning all routes and ranking journeys.
+- Together, these components form the core of the route search engine.
